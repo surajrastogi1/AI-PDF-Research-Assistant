@@ -1,12 +1,22 @@
 from fastapi import FastAPI,HTTPException,Depends
 from sqlmodel import SQLModel,create_engine,Field,Session,select
 from pydantic import EmailStr
+import bcrypt
+
+def get_password_hash(password: str) -> str:
+    # Convert plain text to bytes, salt it, and hash it
+    pwd_bytes = password.encode('utf-8')
+    salt = bcrypt.gensalt()
+    hashed = bcrypt.hashpw(pwd_bytes, salt)
+    return hashed.decode('utf-8') # Convert back to a clean text string for the DB
+
+
 
 class User(SQLModel,table=True):
     id: int | None = Field(default=None,primary_key=True)
     username: str = Field(unique=True,index=True)
     email : str = Field(unique=True)
-    password : str 
+    hashed_password : str 
 
 class UserCreate(SQLModel): #this helps to user enter these things
     username: str
@@ -49,13 +59,19 @@ def register(user_data : UserCreate, session : Session = Depends(get_session)):
     if existing_email:
         raise HTTPException(status_code=400,detail="Email already exists")
     
+    secured_hash_password = get_password_hash(user_data.password)
+
     new_user = User(
         username=user_data.username,
         email = user_data.email,
-        password = user_data.password
+        hashed_password = secured_hash_password
     )
 
     session.add(new_user)
     session.commit()
     session.refresh(new_user)
+
+    return {"message" : "User Registered Successfully!" , "user_id" : new_user.id}
+
+
 
