@@ -37,6 +37,9 @@ def verify_password(plain_password : str , hashed_password : str) -> bool:
 
 
 class User(SQLModel,table=True):
+
+    __tablename__ = "users"
+
     id: int | None = Field(default=None,primary_key=True)
     username: str = Field(unique=True,index=True)
     email : str = Field(unique=True)
@@ -47,9 +50,19 @@ class UserCreate(SQLModel): #this helps to user enter these things
     email: EmailStr
     password: str
 
-class UserLogin(SQLModel):
-    username : str
-    password : str
+class Project(SQLModel, table= True):
+    __tablename__ = "projects"
+
+    id : int | None = Field(default=None,primary_key=True)
+    name: str = Field(default=None)
+    description: str | None= Field(default=None)
+    user_id : int= Field(foreign_key="users.id")
+
+class ProjectCreate(SQLModel):
+    name:str
+    description:str | None = None
+
+
 
 sqlite_file_name = "database.db"
 sqlite_url = f"sqlite:///{sqlite_file_name}"
@@ -72,7 +85,7 @@ def get_current_user(token : str = Depends(oauth2_scheme),session : Session = De
         headers={"WWW-Authenticate" : "Bearer"}
     )
     try:
-        payload = jwt.encode(token,SECRET_KEY,algorithm=[ALGORITHM])
+        payload = jwt.decode(token,SECRET_KEY,algorithms=[ALGORITHM])
         username : str = payload.get("sub")
         if username is None:
             raise credentials_exception
@@ -125,10 +138,10 @@ def login(login_data : OAuth2PasswordRequestForm = Depends(), session : Session 
 
     if not user:
         raise HTTPException(
-            status_code= status.HTTP_404_UNAUTHORIZED,
+            status_code= 401,
             detail= "Invalid username or password"
         )
-    elif not verify_password(login_data.password,user.hashed_password):
+    if not verify_password(login_data.password,user.hashed_password):
         raise HTTPException(
             status_code= 401,
             detail= "Invalid username or password"
@@ -150,6 +163,28 @@ def read_user_me(current_user: User = Depends(get_current_user)):
         "email" : current_user.email,
         "message" : "Welcome to your protected profile"
     }
+
+@app.post("/projects")
+def create_project(
+    project_data : ProjectCreate,
+    session : Session = Depends(get_session),
+    current_user : User = Depends(get_current_user)
+):
+    new_project = Project(
+        name = project_data.name,
+        description= project_data.description,
+        user_id= current_user.id
+    )
+
+    session.add(new_project)
+    session.commit()
+    session.refresh(new_project)
+
+    return {
+        "message" : "Project Created Successfully",
+        "project" : new_project
+    }
+
 
 
 
