@@ -67,6 +67,16 @@ class ProjectCreate(SQLModel):
     name:str
     description:str | None = None
 
+class ProjectPDF(SQLModel, table=True):
+    __tablename__ = "project_pdfs"
+
+    id : int = Field(default=None,primary_key=True)
+    filename : str = Field(default=None)
+    filepath :str = Field(default=None)
+    uploaded_at : datetime = Field(default_factory=lambda : datetime.now(timezone.utc))
+
+    project_id : int = Field(foreign_key="projects.id")
+
 
 
 sqlite_file_name = "database.db"
@@ -279,8 +289,19 @@ def upload_pdf(
     finally:
         file.file.close()
 
+    new_pdf_record = ProjectPDF(
+        filename=file.filename,
+        filepath=file_save_path,
+        project_id=project.id
+    )
+
+    session.add(new_pdf_record)
+    session.commit()
+    session.refresh(new_pdf_record)
+
     return {
         "message" : f"File `{file.filename}` uploaded successfully!",
+        "db_record_id": new_pdf_record.id,
         "saved_path" : file_save_path,
         "content_type" : file.content_type
     }
