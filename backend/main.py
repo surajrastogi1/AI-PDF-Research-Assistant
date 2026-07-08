@@ -2,12 +2,15 @@ from fastapi import FastAPI,HTTPException,Depends,status
 from sqlmodel import SQLModel,create_engine,Field,Session,select
 from pydantic import EmailStr
 from datetime import datetime,timedelta,timezone
+from fastapi.security import OAuth2PasswordBearer,OAuth2PasswordRequestForm
 import bcrypt
 import jwt
 
 SECRET_KEY = "my_super_secret_key_for_researchmind_ai"
 ALGORITHM = "HS256"
 ACCESS_TOKEN_EXPIRE_MINUTES = 30
+
+oauth2_scheme = OAuth2PasswordBearer(tokenUrl="login")
 
 def create_access_tokens(data : dict):
     to_encode = data.copy()
@@ -62,6 +65,25 @@ def get_session():  #to open and close DB
     with Session(engine) as session:
         yield session
 
+def get_current_user(token : str = Depends(oauth2_scheme),session : Session = Depends(get_session)):
+    credentials_exception = HTTPException(
+        status_code=401,
+        detail="Could not validate Credentials",
+        headers={"WWW-Authenticate" : "Bearer"}
+    )
+    try:
+        payload = jwt.encode(token,SECRET_KEY,algorithm=[ALGORITHM])
+        username : str = payload.get("sub")
+        if username is None:
+            raise credentials_exception
+    except jwt.PyJWTError:
+        raise credentials_exception
+    
+    user = session.exec(select(User).where(User.username == username)).first()
+    if user is None:
+        raise credentials_exception
+    return user
+
 app = FastAPI(title="ResearchMind")
 
 @app.on_event("startup")
@@ -98,7 +120,7 @@ def register(user_data : UserCreate, session : Session = Depends(get_session)):
     return {"message" : "User Registered Successfully!" , "user_id" : new_user.id}
 
 @app.post("/login")
-def login(login_data : UserLogin, session : Session = Depends(get_session)):
+def login(login_data : OAuth2PasswordRequestForm = Depends(), session : Session = Depends(get_session)):
     user = session.exec(select(User).where(User.username == login_data.username)).first()
 
     if not user:
@@ -119,6 +141,17 @@ def login(login_data : UserLogin, session : Session = Depends(get_session)):
         "token_type" : "bearer",
         "username" : user.username
     }
+
+@app.get("/me")
+def read_user_me(current_user: User = Depends(get_current_user)):
+    return {
+        "id" : current_user.id,
+        "username" : current_user.username,
+        "email" : current_user.email,
+        "message" : "Welcome to your protected profile"
+    }
+
+
 
 
 
