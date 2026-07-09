@@ -7,6 +7,7 @@ from pypdf import PdfReader
 import bcrypt
 import jwt
 import os
+import re
 
 upload_dir = "uploads"
 os.makedirs(upload_dir,exist_ok=True)
@@ -40,6 +41,33 @@ def verify_password(plain_password : str , hashed_password : str) -> bool:
         plain_password.encode("utf-8"),
         hashed_password.encode("utf-8")
     )
+
+def clean_extracted_text(raw_text : str) -> str:
+    if not raw_text:
+        return ""
+    
+    text = re.sub(r'\s+',' ',raw_text)
+
+    text = text.strip()
+
+    return text
+
+def chunk_text(text : str,chunk_size : int = 500,chunk_overlap:int = 50) -> list[str]:
+    if not text:
+        return []
+    
+    chunks = []
+    start = 0
+    text_length = len(text)
+
+    while start<text_length:
+        end = start+chunk_size
+        chunk = text[start:end]
+        chunks.append(chunk)
+
+        start += (chunk_size-chunk_overlap)
+
+    return chunks
 
 
 class User(SQLModel,table=True):
@@ -77,6 +105,14 @@ class ProjectPDF(SQLModel, table=True):
     uploaded_at : datetime = Field(default_factory=lambda : datetime.now(timezone.utc))
 
     project_id : int = Field(foreign_key="projects.id")
+
+class ProjectChunk(SQLModel,table=True):
+    __tablename__ = "project_chunk"
+    id : int = Field(default=None,primary_key=True)
+    chunk_index : int = Field(index=True)
+    text_content : str
+
+    pdf_id : int = Field(foreign_key="project_pdfs.id")
 
 
 
@@ -322,14 +358,26 @@ def read_pdf(
     
     if project.user_id != current_user.id:
         raise HTTPException(status_code=403,detail="Not authorized to access the pdf")
-    
+
     pdf_record = session.get(ProjectPDF,pdf_id)
 
     if not pdf_record:
         raise HTTPException(status_code=404,detail="PDF Record not found")
     
+    existing_chunks = session.exec(select(ProjectChunk).where(ProjectChunk.pdf_id == pdf_id)).all()
+    if existing_chunks:
+        return {
+            "message" : "PDF already processed",
+            "pdf_id": pdf_record.id,
+            "filename": pdf_record.filename,
+            "total_chunks_stored": len(existing_chunks),
+            "chunks": [ {"index": c.chunk_index, "text": c.text_content[:100] + "..."} for c in existing_chunks ]
+        }
+    
     if not os.path.exists(pdf_record.filepath):
         raise HTTPException(status_code=404,detail="Physical pdf file missin in storage folder")
+    
+
     
     try:
         reader = PdfReader(pdf_record.filepath)
@@ -343,9 +391,44 @@ def read_pdf(
     except Exception as e:
         raise HTTPException(status_code=500,detail=f"Failed to parse  the pdf document: {str(e)}")
     
+    cleaned_text = clean_extracted_text(extracted_text)
+    if not cleaned_text:
+            raise HTTPException(status_code=400, detail="The PDF contains no readable text extract.")
+    
+    text_chunks = chunk_text(cleaned_text,chunk_size=500,chunk_overlap=50)
+
+    stored_chunks_response = []
+    for index , chunk_payload in enumerate(text_chunks):
+        db_chunk = ProjectChunk(
+            chunk_index=index,
+            text_content=chunk_payload,
+            pdf_id=pdf_record.id
+        )
+        session.add(db_chunk)
+        stored_chunks_response.append(db_chunk)
+
+    session.commit()
+    
     return {
+        "message": "PDF Parsed, split , chunked database records generated successfully!",
         "pdf_id" : pdf_record.id,
         "filename" : pdf_record.filename,
         "total_pages" : len(reader.pages),
-        "content" : extracted_text
+        "total_chunks_created": len(stored_chunks_response),
+        "chunks": stored_chunks_response
     }
+
+@app.get("/projects/{project_id}/pdfs/{pdf_id}/chunks")
+def get_chunks(
+    project_id : int,
+    pdf_id : int,
+    session : Session = Depends(get_session),
+    current_user : User = Depends(get_current_user)
+):
+    project = session.get(Project,project_id)
+
+    if not project_id or (project.user_id != current_user.id):
+        raise HTTPException(status_code=403,detail="Not Authorized")
+    
+    chunks = session.exec(select(ProjectChunk).where(ProjectChunk.pdf_id == pdf_id)).all()
+    return chunks
