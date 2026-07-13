@@ -1,6 +1,7 @@
 .venv
 database.db
-app/uploads/
+**/uploads/
+uploads/
 .env
 temp.py
 app/__pycache__/
