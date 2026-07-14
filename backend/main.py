@@ -15,5 +15,5 @@ app.include_router(analytics.router)
 
 @app.get("/")
 def root():
-    return {"message": "API Running, cleanly decoupled, and ready for production deployment."}
+    return {"message": "API Running"}
 
